@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# Hermes core (FastAPI orchestrator) — pinned dependency set.
+# Keep this list MINIMAL: every extra wheel slows the image build.
+# Versions below are exact pins that exist on PyPI and are mutually compatible.
+# ---------------------------------------------------------------------------
+
+# --- web framework / ASGI ---------------------------------------------------
+# Kept current on purpose: fastapi 0.115.x pins starlette<0.42, which fights
+# mcp 2.x's sse-starlette>=3.0.0 and makes pip backtrack through dozens of
+# sse-starlette releases on every image build. Modern fastapi lets starlette
+# resolve forward and the install stays fast and deterministic.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-multipart==0.0.20          # multipart/form-data for POST /api/resume/upload
+
+# --- config / validation ----------------------------------------------------
+# mcp 2.1.1 requires pydantic>=2.12.0, so 2.10.x cannot be used here.
+pydantic==2.13.5
+pydantic-settings==2.15.0
+
+# --- persistence ------------------------------------------------------------
+SQLAlchemy==2.0.36                # 2.0 style Mapped[]/mapped_column; SYNC sqlite3 driver
+
+# --- outbound HTTP / LLM router --------------------------------------------
+httpx==0.28.1
+
+# --- LinkedIn MCP server client (streamable-http transport) -----------------
+# 2.x is REQUIRED. The 1.x transport symbol `streamablehttp_client` was renamed
+# to `streamable_http_client` with no back-compat alias, and hermes/mcp_client.py
+# uses the 2.x high-level `mcp.Client`. Verified working against
+# linkedin-mcp-server 4.23.2 (protocol 2025-11-25). mcp 2.x pulls in httpx2,
+# which coexists with httpx above.
+mcp==2.1.1
+
+# --- Docker control plane (sandbox spawning + container management) ---------
+docker==7.1.0
+
+# --- files, documents, text extraction -------------------------------------
+aiofiles==24.1.0
+python-docx==1.1.2                # ATS-safe .docx generation (also used inside sandbox)
+pypdf==5.1.0                      # PDF text extraction for uploaded resumes
+docx2txt==0.8                     # fast .docx text extraction for uploaded resumes
+Jinja2==3.1.4                     # prompt / script templating

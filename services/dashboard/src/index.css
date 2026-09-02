@@ -1,0 +1,228 @@
+/*
+ * Hermes dashboard - global stylesheet.
+ *
+ * Rules of the house:
+ *   - Dark theme only. `index.html` sets <html class="dark"> and color-scheme:dark,
+ *     so form controls, scrollbars and autofill all render dark natively.
+ *   - No @import, no CDN, no webfont. The system stack in tailwind.config.js is it;
+ *     Hermes is self-hosted and must render identically with the network unplugged.
+ *   - Everything reusable lives in Tailwind classes inside the components. The only
+ *     things declared here are (a) the CSS variables that inline SVG needs (Tailwind
+ *     cannot reach `stroke` on an SVG attribute), (b) chrome that Tailwind does not
+ *     cover (scrollbars, selection), and (c) one focus-ring utility so every
+ *     interactive element in the app is keyboard-visible by default.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -------------------------------------------------------------------------- */
+/* Design tokens                                                              */
+/* -------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest -> lightest. Mirrors the `ink` ramp in tailwind.config.js. */
+  --hermes-bg: #0a0d13;
+  --hermes-surface: #11161f;
+  --hermes-surface-raised: #151b26;
+  --hermes-border: #212a38;
+  --hermes-border-strong: #2c3646;
+
+  /* Text */
+  --hermes-text: #dde3ec;
+  --hermes-text-muted: #8593a8;
+  --hermes-text-faint: #5a6980;
+
+  /* Accent + semantic. Used by inline SVG (ScoreGauge, SubscoreBars, StatusDot). */
+  --hermes-brand: #2ec8e4;
+  --hermes-brand-dim: #0d87a3;
+  --hermes-good: #22c55e;
+  --hermes-warn: #f59e0b;
+  --hermes-bad: #ef4444;
+  --hermes-info: #6366f1;
+  --hermes-idle: #5a6980;
+
+  /* Chrome metrics shared between the fixed sidebar and the content offset. */
+  --hermes-sidebar-w: 15rem;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Base                                                                       */
+/* -------------------------------------------------------------------------- */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-ink-900 font-sans text-[0.9375rem] leading-relaxed text-ink-100 antialiased;
+    margin: 0;
+    min-height: 100vh;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * Reset removes the visible outline; put a real one back for keyboard users.
+   * Mouse users never see it (`:focus-visible`), keyboard users always do.
+   */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-400 ring-offset-2 ring-offset-ink-900;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-semibold text-ink-100;
+    text-wrap: balance;
+  }
+
+  /* Long job titles / container ids must never blow out a flex row. */
+  p,
+  li,
+  td,
+  th {
+    overflow-wrap: anywhere;
+  }
+
+  a {
+    @apply text-brand-300 underline-offset-2;
+  }
+
+  a:hover {
+    @apply text-brand-200 underline;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
+  }
+
+  ::selection {
+    background-color: rgba(46, 200, 228, 0.28);
+    color: #ffffff;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--hermes-border-strong) transparent;
+  }
+
+  /* WebKit / Blink */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--hermes-border-strong);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #3d4a5c;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Dark-native form controls, including the dropdown list of a <select>. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Chrome's yellow autofill wash is unreadable on an ink-850 field. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  textarea:-webkit-autofill {
+    -webkit-text-fill-color: var(--hermes-text);
+    -webkit-box-shadow: 0 0 0 1000px var(--hermes-surface-raised) inset;
+    caret-color: var(--hermes-text);
+  }
+
+  /* Respect the OS setting - all of our motion is decorative. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared component classes                                                   */
+/* -------------------------------------------------------------------------- */
+
+@layer components {
+  /*
+   * Explicit ring for elements that suppress the global one (buttons, rows,
+   * table headers). Add a `ring-offset-*` utility after it to match a surface
+   * other than the page background - utilities beat the components layer.
+   */
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 focus-visible:ring-offset-ink-900;
+  }
+
+  /* Keyboard-only escape hatch to the routed content (first tab stop in App). */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-brand-500 focus:px-4 focus:py-2 focus:font-medium focus:text-ink-950;
+  }
+
+  /* Text inputs / selects / textareas across every page. */
+  .field {
+    @apply w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-400;
+    @apply focus-ring focus-visible:border-brand-500 disabled:cursor-not-allowed disabled:opacity-55;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-ink-300;
+  }
+
+  /* One log line in LogStream / sandbox output. */
+  .log-line {
+    @apply flex gap-3 whitespace-pre-wrap break-words px-3 py-[3px] font-mono text-xs leading-5;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Utilities                                                                  */
+/* -------------------------------------------------------------------------- */
+
+@layer utilities {
+  /* Fade a long block of text out at the bottom instead of clipping it hard. */
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent 100%);
+  }
+
+  /* Tabular digits keep score columns and timers from jittering. */
+  .nums {
+    font-variant-numeric: tabular-nums;
+  }
+}

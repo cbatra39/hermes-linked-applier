@@ -1,0 +1,90 @@
+# =============================================================================
+#  Hermes — root .dockerignore
+# =============================================================================
+#  SCOPE NOTE: Docker reads the .dockerignore that sits at the root of the
+#  BUILD CONTEXT. Hermes' build contexts are ./services/core, ./services/dashboard
+#  and ./services/sandbox, each of which carries its own .dockerignore — so this
+#  file is not consulted by `make build`.
+#
+#  It is kept for two real reasons:
+#    1. anyone who builds an ad-hoc image with `docker build .` from the repo
+#       root (a debug habit that is hard to stamp out) does not send .env, the
+#       multi-GB dist/ tarballs, or node_modules to the daemon;
+#    2. it documents, in one place, what is never allowed inside any image.
+#
+#  Rule of thumb: if it is a secret, a build output, or runtime state, it does
+#  not belong in a build context.
+# =============================================================================
+
+# --- Secrets: an image layer is world-readable to anyone who has the image ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Transfer / build artifacts ---
+dist/
+*.tar
+*.tar.gz
+*.tgz
+
+# --- Runtime state (lives in Docker volumes, never baked into an image) ---
+data/
+artifacts/
+workspaces/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# --- Version control & CI ---
+.git/
+.gitignore
+.github/
+.gitattributes
+
+# --- Compose / tooling that images must not depend on ---
+docker-compose.yml
+docker-compose.*.yml
+Makefile
+scripts/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Node ---
+node_modules/
+.pnpm-store/
+.vite/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Docs (not needed at runtime) ---
+README.md
+LICENSE-NOTICE.md
+docs/

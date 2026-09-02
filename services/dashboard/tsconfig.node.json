@@ -1,0 +1,16 @@
+{
+  "comment": "Type-checks the Node-side build tooling (vite.config.ts). Kept separate from the browser tsconfig because it needs Node globals (process.env) and no DOM lib.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"]
+}

@@ -1,0 +1,113 @@
+# =============================================================================
+#  Hermes — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Secrets — NEVER commit these
+# -----------------------------------------------------------------------------
+# .env holds ENCRYPTION_KEY (decrypts freellmapi's stored provider keys) and
+# FREELLMAPI_KEY (a live bearer token). .env.example is the tracked template.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/*.key.example
+secrets/
+
+# -----------------------------------------------------------------------------
+# Shipping artifacts (`make ship` / `make backup`)
+# -----------------------------------------------------------------------------
+# Multi-GB image tarballs, plus volume backups that contain LinkedIn session
+# cookies. Both are transfer artifacts, not source.
+dist/
+*.tar
+*.tar.gz
+*.tgz
+
+# -----------------------------------------------------------------------------
+# Runtime data
+# -----------------------------------------------------------------------------
+# Normally these live in Docker named volumes, but they land here when someone
+# runs hermes-core directly on the host for debugging.
+data/
+artifacts/
+workspaces/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Generated resumes / rendered documents
+*.docx
+*.pdf
+!docs/**/*.pdf
+
+# -----------------------------------------------------------------------------
+# Python (services/core, services/sandbox)
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+# -----------------------------------------------------------------------------
+# Node / Vite (services/dashboard)
+# -----------------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# -----------------------------------------------------------------------------
+# Editors / OS noise
+# -----------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+logs/

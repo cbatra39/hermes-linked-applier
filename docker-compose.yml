@@ -1,0 +1,362 @@
+# ============================================================================
+#  Hermes — self-hosted LinkedIn profile analyst / ATS resume builder /
+#           job scout dashboard.
+#
+#  Bring the stack up with:   make up          (or: docker compose up -d)
+#  Build everything with:     make build       (or: docker compose --profile build-only build)
+#  Log into LinkedIn with:    make login-linkedin
+#
+#  There is no `version:` key on purpose — it is obsolete in the Compose
+#  Specification and modern `docker compose` warns about it.
+#
+#  The project name is pinned so the compose network and the named volumes are
+#  predictable across machines:
+#     network : hermes-linkedin_hermes
+#     volumes : hermes-linkedin_hermes-data,
+#               hermes-linkedin_freellmapi-data,
+#               hermes-linkedin_linkedin-session
+#  Container names are set explicitly per service (hermes-core, hermes-dashboard,
+#  hermes-freellmapi, hermes-linkedin-mcp), so they do not depend on this name.
+#
+#  NOT just "hermes": a separate hermes-agent project on the same machine
+#  already owns `hermes_*` volumes and `hermes_*` containers, and it publishes
+#  its own freellmapi on 3001. Distinct project names keep the two stacks from
+#  adopting each other's volumes. They still contend for host PORTS, so run one
+#  at a time or change FREELLMAPI_PORT / HERMES_DASHBOARD_PORT in .env.
+# ============================================================================
+name: hermes-linkedin
+
+# ---------------------------------------------------------------------------
+# Shared fragments
+# ---------------------------------------------------------------------------
+
+# Every first-party container carries these labels so hermes-core can filter
+# "our" containers on the Containers dashboard page without accidentally
+# listing (or stopping) unrelated containers on the developer's machine.
+x-hermes-labels: &hermes-labels
+  com.hermes.stack: "hermes"
+
+# Log rotation: these containers are long-lived and chatty (Playwright and
+# the LLM router both log per request). Without this the json-file driver
+# grows without bound.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  # Single flat network. hermes-core resolves the other services by their
+  # compose service name (freellmapi, linkedin-mcp), which is exactly what the
+  # in-network URLs in .env assume:
+  #   FREELLMAPI_BASE_URL=http://freellmapi:3001/v1
+  #   LINKEDIN_MCP_URL=http://linkedin-mcp:8000/mcp
+  hermes:
+    driver: bridge
+
+volumes:
+  # SQLite DB, generated resumes, sandbox workspaces  -> /data in hermes-core
+  hermes-data:
+  # freellmapi's own encrypted provider-key store     -> /app/server/data
+  freellmapi-data:
+  # Persistent Playwright browser profile == the LinkedIn session/cookies.
+  #
+  # IMPORTANT: this MUST stay a named volume. The upstream image seeds a fresh
+  # named volume from the contents of /home/pwuser/.linkedin-mcp baked into the
+  # image. A bind mount of a host directory (e.g. ~/.linkedin-mcp) skips that
+  # seeding and, on Windows, also mangles file ownership/permissions for the
+  # `pwuser` (uid 1000) account inside the container — which breaks the browser
+  # profile entirely. Do not "helpfully" convert this to a bind mount.
+  linkedin-session:
+
+services:
+  # ==========================================================================
+  # 1. freellmapi — OpenAI-compatible router that aggregates the free tiers of
+  #    several LLM providers. Hermes talks ONLY to this; it never holds
+  #    provider keys itself.
+  #
+  #    First-run setup (one time, by hand):
+  #      1. open http://127.0.0.1:3001 in a browser
+  #      2. add one or more free provider keys in its dashboard
+  #      3. mint a client token (it looks like `freellmapi-...`)
+  #      4. paste that token into .env as FREELLMAPI_KEY and `make restart`
+  # ==========================================================================
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:latest
+    container_name: hermes-freellmapi
+    env_file:
+      - .env
+    environment:
+      # Explicit values win over whatever env_file happens to carry.
+      # Fail fast and loudly rather than silently booting a router that cannot
+      # decrypt its own provider-key store. ASCII-only message: this string is
+      # printed by the compose CLI, including on Windows consoles.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is unset. Run "make bootstrap" or put a 64-char hex value in .env}
+      PORT: "3001"
+      NODE_ENV: production
+    ports:
+      # Published on loopback only by default. Change HOST_BIND to 0.0.0.0 in
+      # .env if you genuinely want this reachable from your LAN — note that its
+      # dashboard is where provider keys live, so think before you do.
+      - "${HOST_BIND:-127.0.0.1}:${FREELLMAPI_PORT:-3001}:3001"
+    volumes:
+      - freellmapi-data:/app/server/data
+    extra_hosts:
+      # Lets the router reach a provider proxy / Ollama / LM Studio running on
+      # the host machine via http://host.docker.internal:<port>.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # /api/ping is the router's liveness endpoint. This is a Node image, so
+      # we probe with node's global fetch rather than assuming curl or wget
+      # exist in the image (they often do not in slim Node bases).
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "fetch('http://127.0.0.1:3001/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    networks:
+      - hermes
+    labels: *hermes-labels
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ==========================================================================
+  # 2. linkedin-mcp — LinkedIn scraping tools exposed over MCP
+  #    (streamable-http transport). The image's ENTRYPOINT is fixed, so all
+  #    configuration is passed as flags through `command:`.
+  #
+  #    This container is a *reader*. There is deliberately no apply tool: see
+  #    LICENSE-NOTICE.md. Hermes ranks jobs and hands you an apply URL; you
+  #    click Submit yourself.
+  # ==========================================================================
+  linkedin-mcp:
+    image: stickerdaniel/linkedin-mcp-server:4.23.2
+    container_name: hermes-linkedin-mcp
+    command:
+      - "--transport"
+      - "streamable-http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--path"
+      - "/mcp"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # FastMCP rejects requests whose Host header is not allow-listed. Inside
+      # the compose network the Host is the service name, which is not a value
+      # we can predict for every deployment, so allow all. The container has no
+      # published port by default, so its only reachable surface is this
+      # private network.
+      #
+      # This MUST be a JSON array, not a bare "*". FastMCP parses it with
+      # pydantic-settings into a list[str], and the plain string fails
+      # validation at import time with
+      #   "http_allowed_hosts: Input should be a valid list"
+      # which crashes the container on boot before it ever listens. Verified
+      # against stickerdaniel/linkedin-mcp-server:4.23.2.
+      FASTMCP_HTTP_ALLOWED_HOSTS: '["*"]'
+      # Scrapes involve real page loads and scrolling; the default tool timeout
+      # is far too short for get_my_profile with many sections.
+      TOOL_TIMEOUT: "180"
+      # Tells the entrypoint it is containerised (affects Chrome sandbox flags
+      # and the interactive-login code path).
+      LINKEDIN_MCP_CONTAINER: "1"
+    volumes:
+      - linkedin-session:/home/pwuser/.linkedin-mcp
+    # No `ports:` on purpose — hermes-core reaches this over the compose
+    # network at http://linkedin-mcp:8000/mcp. Uncomment to poke at the MCP
+    # endpoint from the host with e.g. an MCP inspector:
+    # ports:
+    #   - "${HOST_BIND:-127.0.0.1}:8000:8000"
+    #
+    # Playwright needs more than the default 64MB of /dev/shm or Chrome will
+    # crash on content-heavy pages.
+    shm_size: "1gb"
+    # No healthcheck: MCP streamable-http has no unauthenticated liveness route
+    # and a bare GET on /mcp returns a protocol error rather than 200. Health
+    # is reported instead by hermes-core's own probe, surfaced at
+    # GET /api/linkedin/status.
+    networks:
+      - hermes
+    labels: *hermes-labels
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ==========================================================================
+  # 3. linkedin-login — ONE-SHOT interactive login helper (profile-gated).
+  #
+  #    LinkedIn login cannot be automated reliably (2FA, checkpoints, CAPTCHAs)
+  #    and Hermes will not try. Instead this container starts a real browser
+  #    with a noVNC viewer so YOU log in with your own hands. The resulting
+  #    cookies land in the shared `linkedin-session` volume, which the
+  #    long-running linkedin-mcp service then reuses.
+  #
+  #    Usage:
+  #        make login-linkedin
+  #        # open http://127.0.0.1:6080/vnc.html, log in, then Ctrl-C
+  #        make restart          # so linkedin-mcp picks up the fresh session
+  #
+  #    It is behind `profiles: ["login"]` so a plain `docker compose up` never
+  #    starts it.
+  # ==========================================================================
+  linkedin-login:
+    image: stickerdaniel/linkedin-mcp-server:4.23.2
+    container_name: hermes-linkedin-login
+    profiles: ["login"]
+    command:
+      - "--login"
+      - "--login-viewer"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LINKEDIN_MCP_CONTAINER: "1"
+    volumes:
+      # Same volume as linkedin-mcp — this is the entire point of this service.
+      - linkedin-session:/home/pwuser/.linkedin-mcp
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${LINKEDIN_VIEWER_PORT:-6080}:6080"
+    # Keep stdin/tty attached: the entrypoint prompts on the console and waits
+    # for you to finish in the viewer.
+    stdin_open: true
+    tty: true
+    shm_size: "1gb"
+    networks:
+      - hermes
+    labels: *hermes-labels
+    logging: *default-logging
+    # A one-shot must never be resurrected by the restart policy.
+    restart: "no"
+
+  # ==========================================================================
+  # 4. hermes-core — the FastAPI orchestrator (profile analyst, resume
+  #    architect, ATS scorer, job scout, match ranker, sandbox manager).
+  # ==========================================================================
+  hermes-core:
+    build:
+      context: ./services/core
+      dockerfile: Dockerfile
+    # Pinned so `make ship` / `docker save` can find the image by name.
+    image: hermes-core:latest
+    container_name: hermes-core
+    env_file:
+      - .env
+    environment:
+      # Container-internal paths; these must not be overridden from .env with
+      # host paths or nothing will resolve.
+      HERMES_DATA_DIR: ${HERMES_DATA_DIR:-/data}
+      HERMES_DOCKER_HOST: ${HERMES_DOCKER_HOST:-unix:///var/run/docker.sock}
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HERMES_API_PORT:-8080}:8080"
+    volumes:
+      - hermes-data:/data
+      # ----------------------------------------------------------------------
+      # DOCKER SOCKET MOUNT — READ THIS BEFORE YOU DEPLOY THIS ANYWHERE.
+      #
+      # Why it is here: hermes-core does not run untrusted code (LLM-authored
+      # scripts, LibreOffice document conversion) in its own process. It asks
+      # the host Docker daemon to spawn a short-lived, locked-down
+      # `hermes-sandbox` container per job — network disabled, read-only root
+      # filesystem, all capabilities dropped, no-new-privileges, memory/CPU/pid
+      # capped, running as uid 1000. It also powers the Containers page
+      # (list/start/stop/restart/remove/logs/stats).
+      #
+      # What it costs: access to the Docker socket is effectively root on the
+      # host. A remote-code-execution bug in hermes-core would therefore be a
+      # host compromise, not just a container compromise. This is an accepted
+      # trade-off for a SINGLE-USER, LOOPBACK-BOUND, SELF-HOSTED tool. It is
+      # NOT acceptable for a multi-tenant or internet-exposed deployment.
+      #
+      # Mitigations, in rough order of effort:
+      #   * keep HOST_BIND=127.0.0.1 (the default) so nothing is exposed;
+      #   * mount it read-only (`:ro`) — this keeps the Containers page's
+      #     read-only views working but disables sandbox spawning and the
+      #     start/stop/remove buttons;
+      #   * put a socket proxy (e.g. tecnativa/docker-socket-proxy) in front of
+      #     it and point HERMES_DOCKER_HOST at that instead;
+      #   * or drop this mount entirely and accept that /api/sandbox/exec,
+      #     resume rendering and the Containers page will fail loudly.
+      # ----------------------------------------------------------------------
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      freellmapi:
+        # Wait for the router to actually answer /api/ping, not just to start,
+        # so the first LLM call at boot does not fail.
+        condition: service_healthy
+      linkedin-mcp:
+        # Only "started": the MCP server has no healthcheck (see above) and an
+        # unauthenticated LinkedIn session is a normal, recoverable state that
+        # the dashboard tells the user how to fix.
+        condition: service_started
+    healthcheck:
+      # python3 is guaranteed present in this image; curl is not.
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import urllib.request,sys;sys.exit(0
+          if urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=5).status==200
+          else 1)"
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - hermes
+    labels: *hermes-labels
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ==========================================================================
+  # 5. hermes-dashboard — React + Vite build served by nginx, which also
+  #    reverse-proxies /api -> hermes-core:8080 (so the browser sees a single
+  #    origin and there are no CORS surprises, including for SSE streams).
+  # ==========================================================================
+  hermes-dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile
+    image: hermes-dashboard:latest
+    container_name: hermes-dashboard
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HERMES_DASHBOARD_PORT:-3000}:80"
+    depends_on:
+      hermes-core:
+        condition: service_started
+    networks:
+      - hermes
+    labels: *hermes-labels
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ==========================================================================
+  # 6. hermes-sandbox-image — NOT A SERVICE.
+  #
+  #    This entry exists for exactly one reason: to give `docker compose build`
+  #    a reason to build ./services/sandbox and tag the result as
+  #    ${HERMES_SANDBOX_IMAGE}. hermes-core then spawns ephemeral containers
+  #    FROM that image through the Docker socket; nothing ever runs it as a
+  #    long-lived compose service.
+  #
+  #    It is gated behind `profiles: ["build-only"]` so `docker compose up`
+  #    ignores it completely, and `command: ["true"]` guarantees that if
+  #    somebody does start it by name it exits 0 immediately instead of
+  #    hanging or crash-looping.
+  #
+  #    Build it with:  docker compose --profile build-only build
+  #                    (which is what `make build` does)
+  # ==========================================================================
+  hermes-sandbox-image:
+    build:
+      context: ./services/sandbox
+      dockerfile: Dockerfile
+    image: ${HERMES_SANDBOX_IMAGE:-hermes-linkedin/sandbox:latest}
+    profiles: ["build-only"]
+    command: ["true"]
+    restart: "no"
+    labels:
+      com.hermes.stack: "hermes"
+      com.hermes.role: "sandbox-image"
